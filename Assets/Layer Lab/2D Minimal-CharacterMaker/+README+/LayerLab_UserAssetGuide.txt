@@ -1,0 +1,95 @@
+Thank you for choosing and using our assets!
+
+For detailed information and guidance on assets, please refer to the LayerLab User Asset Guide. 
+You can access the guide by copying and pasting the following link into your browser:
+--------------------------------------
+https://tinyurl.com/LayerLabAssetGuide
+--------------------------------------
+
+
+
+## Font Information & License:
+
+The text in this asset uses the 'LineSeedSans' fonts provided by LY Corp.
+
+You must review and comply with the licensing terms for each font.
+
+- LineSeedSans
+https://seed.line.me/index_kr.html
+https://scripts.sil.org/OFL
+
+
+##  Link to download Spine
+https://ko.esotericsoftware.com/spine-unity-download
+
+
+
+================================================================================
+업데이트 내역 (Update History)
+================================================================================
+
+[2026-05-07] 폴더 구조 개편 — Pack 기반 자동 누적
+
+  변경 요약
+  ---------
+  - Base Folder 기본 경로 변경
+      이전 : Assets/Layer Lab/2D Art Maker Unity/AMMinimalGame Character/Sprites/Character
+      이후 : Assets/Layer Lab/2D Minimal-CharacterMaker/Extenstions
+
+  - Theme(Fantasy / Fantasy1 ...) 기반 로딩 제거
+      ThemeType / selectedThemes 사용을 Editor 측에서 모두 제거.
+      더 이상 인스펙터에서 테마를 선택할 필요가 없음.
+      (PartsManager.cs 의 selectedThemes 필드는 직렬화 호환을 위해 남아 있으나
+       런타임/에디터 양쪽 모두에서 더 이상 참조되지 않음.)
+
+  - 폴더 구조 일반화 : Pack 단위 자동 누적
+      Base Folder 하위의 모든 1단계 폴더를 "Pack" 으로 간주하고,
+      각 Pack 안의 모든 서브폴더(Thumbnail 제외)를 재귀 스캔하여
+      PartsFolderMap 에 매칭되는 폴더의 스프라이트를 PartsType 별로 합침.
+
+      이전 :
+        Base Folder/Common/{Eye,Hair,Beard,Helmet_Hair,Skin}
+        Base Folder/Theme/{Fantasy|Fantasy1|...}/{Chest,Helmet,Sword,...}
+
+      이후 :
+        Base Folder/{Pack}/Parts/{Chest,Helmet,HandRight/*,HandLeft/*}
+        Base Folder/{Pack}/Character/{Eye,Hair,Beard,Helmet_Hair,...}
+        Base Folder/{Pack}/Thumbnail/{PartsType...}
+
+      Pack 이름은 자유(예: Parts Pack Base, Parts Pack Vol.1).
+      Vol.2 / Vol.3 등을 추가해도 코드 수정 없이 Auto Setup 만 다시 실행하면 됨.
+
+  - "Thumnail" 오타 수정 (Thumnail -> Thumbnail)
+      에디터 상수 THUMBNAIL_SUBFOLDER 도 "Thumbnail" 로 정정.
+
+  - 그룹 폴더 자동 인식
+      Pack 안에 새 그룹 폴더(예: Character)를 추가해도 코드 변경 불필요.
+      Thumbnail 폴더만 제외되며, 나머지는 모두 재귀 스캔됨.
+
+  영향 범위
+  ---------
+  - Editor : Common/Scripts/Editor/PartsManagerEditor.cs
+      * DEFAULT_SPRITE_FOLDER 경로 변경
+      * selectedThemesProp / IsThemeSelected / AddTheme / RemoveTheme 제거
+      * CommonFolderMap / ThemeFolderMap 제거 →
+        PartsFolderMap (folder name -> PartsType) 로 통합
+      * ThumbnailFolderMap (PartsType -> folder name) 신설
+      * LoadSpritesFromFolder / LoadThumbnails 재작성
+      * ScanThemeFolder -> ScanPartsFolder 로 이름 변경 + 재귀 스캔 유지
+      * 사용하지 않게 된 FindCategoryIndex / SetSpritesToCategory 제거
+
+  마이그레이션 가이드
+  -------------------
+  1) PartsManager 인스펙터의 [Base Folder] 를
+     Assets/Layer Lab/2D Minimal-CharacterMaker/Extenstions 로 지정.
+     (EditorPrefs 에 이전 경로가 저장돼 있을 수 있으므로 한 번 다시 지정 필요.)
+  2) [Auto Setup] 버튼 클릭.
+     - 자식 SpriteRenderer 자동 매핑
+     - 모든 Pack 의 Parts/Character 스프라이트 누적 적용
+     - 모든 Pack 의 Thumbnail 누적 적용
+  3) 새 컨텐츠 팩 추가 시:
+     Extenstions/{새 Pack 폴더}/ 아래에
+     Parts/, Character/(선택), Thumbnail/ 만 같은 컨벤션으로 두고
+     Auto Setup 을 다시 누르면 자동 반영.
+
+  자세한 인스펙터 / API 사용법은 동일 폴더의 UserGuide.txt 참조.

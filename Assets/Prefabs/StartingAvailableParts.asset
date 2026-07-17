@@ -1,0 +1,96 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9b7d6a35a0f44f448d6f2c7b7e2a17c1, type: 3}
+  m_Name: StartingAvailableParts
+  m_EditorClassIdentifier: LayerLab.ArtMakerUnity::LayerLab.ArtMakerUnity.PartsAvailabilityData
+  pools:
+  - type: 0
+    allowAll: 1
+    availableSprites: []
+    availableIndices: 
+  - type: 1
+    allowAll: 1
+    availableSprites: []
+    availableIndices: 
+  - type: 2
+    allowAll: 0
+    availableSprites: []
+    availableIndices: 
+  - type: 3
+    allowAll: 1
+    availableSprites: []
+    availableIndices: 
+  - type: 4
+    allowAll: 0
+    availableSprites: []
+    availableIndices: 
+  - type: 5
+    allowAll: 0
+    availableSprites:
+    - {fileID: 21300000, guid: e51dbcfdf25177a4f87b9854c95989c9, type: 3}
+    - {fileID: 21300000, guid: cf80f4afcf2c5be42827942fb297b6db, type: 3}
+    - {fileID: 21300000, guid: d79ca8d4a97c0344e9f342c38f107d51, type: 3}
+    - {fileID: 21300000, guid: 6921d60e8b2ca4c43b146003f4c08d31, type: 3}
+    - {fileID: 21300000, guid: 964754710819f094f84b66335c6fd36e, type: 3}
+    availableIndices: 0000000000000000
+  - type: 6
+    allowAll: 0
+    availableSprites:
+    - {fileID: 21300000, guid: d9c84f58766986e459c3210211fdff09, type: 3}
+    availableIndices: 00000000
+  - type: 7
+    allowAll: 0
+    availableSprites:
+    - {fileID: 21300000, guid: 4c2a193a3b773674e8dbc3a7c44a3112, type: 3}
+    availableIndices: 00000000
+  - type: 8
+    allowAll: 0
+    availableSprites:
+    - {fileID: 21300000, guid: e1635d68752a05e4db83ffaa5e9db31b, type: 3}
+    availableIndices: 00000000
+  - type: 9
+    allowAll: 0
+    availableSprites: []
+    availableIndices: 00000000
+  - type: 10
+    allowAll: 0
+    availableSprites:
+    - {fileID: 21300000, guid: 9119991745c48b24b96c6fb2c3864eaa, type: 3}
+    availableIndices: 00000000
+  - type: 11
+    allowAll: 0
+    availableSprites:
+    - {fileID: 21300000, guid: ad70dddbf1e7c154ab8ff53d99ad6b05, type: 3}
+    availableIndices: 00000000
+  - type: 12
+    allowAll: 0
+    availableSprites:
+    - {fileID: 21300000, guid: d909603659484d844b90fd8187e69b5f, type: 3}
+    availableIndices: 00000000
+  - type: 13
+    allowAll: 0
+    availableSprites: []
+    availableIndices: 00000000
+  - type: 14
+    allowAll: 0
+    availableSprites:
+    - {fileID: 21300000, guid: 6004f4edc0bb6bc409ab10ec376eaefd, type: 3}
+    - {fileID: 21300000, guid: 6277e078d5533b342b5933490fee1aac, type: 3}
+    availableIndices: 00000000
+  - type: 15
+    allowAll: 0
+    availableSprites: []
+    availableIndices: 00000000
+  - type: 16
+    allowAll: 0
+    availableSprites: []
+    availableIndices: 00000000
