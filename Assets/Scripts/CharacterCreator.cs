@@ -13,6 +13,7 @@ public class CharacterCreator : MonoBehaviour
     {
         CharacterCreation,
         Name,
+        WaitForOtherPlayers,
         SceneTransition,
     }
 
@@ -28,6 +29,8 @@ public class CharacterCreator : MonoBehaviour
 
     [SerializeField] private TMP_Text textTitle;
     [SerializeField] private TMP_Text characterName_Text;
+    [SerializeField] private TMP_Text waitingforOtherPlayer_Text;
+    [SerializeField] private TMP_Text numberofplayerReady_Text; // this is the actual text where it should show (currently ready player) / max count of player (for example: 2/4) during the wait time.
     [SerializeField] private CanvasGroup confirmButton;
     [SerializeField] private CanvasGroup inputFieldUI;
     [SerializeField] private TMP_InputField inputField;
@@ -58,6 +61,10 @@ public class CharacterCreator : MonoBehaviour
 
         textTitle.text = "Create your character";
         currentUIStage = UIStage.CharacterCreation;
+
+        // hide UI for different statge
+        waitingforOtherPlayer_Text.gameObject.SetActive(false);
+        numberofplayerReady_Text.gameObject.SetActive(false);
     }
 
     /// <summary>
@@ -81,6 +88,42 @@ public class CharacterCreator : MonoBehaviour
         if (IsTextInputFocused()) return;
         if (Input.GetKeyDown(KeyCode.R))
             OnClickResetAll();
+    }
+
+    private void LateUpdate()
+    {
+        switch (currentUIStage)
+        {
+            case UIStage.WaitForOtherPlayers:
+                WaitForOtherPlayersUpdate();
+                break;
+            case UIStage.SceneTransition:
+                SceneTransitionUpdate();
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void WaitForOtherPlayersUpdate()
+    {
+        if (currentUIStage != UIStage.WaitForOtherPlayers) return;
+
+        // insert mirror code here and display the number of player that are ready
+        numberofplayerReady_Text.text = "/";
+
+        // check if every player are ready.
+        if (false) // insert mirror code here to check
+        {
+            currentUIStage = UIStage.SceneTransition;
+        }
+    }
+
+    private void SceneTransitionUpdate()
+    {
+        if (currentUIStage != UIStage.SceneTransition) return;
+
+        // everyone wait 1.5 seconds here then transit to the next scene, "Game".
     }
 
     /// <summary>
@@ -142,7 +185,7 @@ public class CharacterCreator : MonoBehaviour
         }
         else if ( currentUIStage == UIStage.Name )
         {
-            currentUIStage++;
+            currentUIStage = UIStage.WaitForOtherPlayers;
             player.PartsManager.GetComponent<Animator>().Play("Jump");
 
             confirmButton.gameObject.SetActive(false);
@@ -153,6 +196,15 @@ public class CharacterCreator : MonoBehaviour
             characterName_Text.text = inputField.text;
             characterName_Text.fontMaterial.SetColor(ShaderUtilities.ID_OutlineColor, Color.white);
             characterName_Text.fontMaterial.SetFloat(ShaderUtilities.ID_OutlineWidth, 0.5f);
+
+            // player stuck here until all other player are ready. Show a UI that update instantly about the number of player that are ready
+            waitingforOtherPlayer_Text.gameObject.SetActive(true);
+            waitingforOtherPlayer_Text.alpha = 0.0f;
+            waitingforOtherPlayer_Text.DOFade(1.0f, 1.0f);
+            numberofplayerReady_Text.gameObject.SetActive(true);
+            numberofplayerReady_Text.alpha = 0.0f;
+            numberofplayerReady_Text.DOFade(1.0f, 1.0f);
+            numberofplayerReady_Text.text = "0/4"; // update this UI on FixedUpdate()
         }
     }
 
