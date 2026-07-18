@@ -11,100 +11,184 @@ public class MainMenuControl : MonoBehaviour
     [SerializeField] private TMP_InputField inputField_IPAddress;
     [SerializeField] private Button connectLobbyBtn;
 
+    private DungeonNetworkManager networkManager;
+    private bool waitingForConnection;
+
+    private void OnEnable()
+    {
+        networkManager = DungeonNetworkManager.EnsureInstance();
+        DungeonNetworkManager.ConnectionStateChanged += OnConnectionStateChanged;
+    }
+
     private void Start()
     {
         // setup
-        joinLobbyUI.alpha = 0.0f;
-        joinLobbyUI.blocksRaycasts = false;
-        joinLobbyUI.interactable = false;
+        HideCanvasGroup(joinLobbyUI, false);
+        HideCanvasGroup(loadingUI, false);
 
-        loadingUI.alpha = 0.0f;
-        loadingUI.blocksRaycasts = false;
-        loadingUI.interactable = false;
+        if (inputField_IPAddress != null)
+        {
+            inputField_IPAddress.onValueChanged.AddListener(OnIPAdressInput);
+            OnIPAdressInput(inputField_IPAddress.text);
+        }
 
-        inputField_IPAddress.onValueChanged.AddListener(OnIPAdressInput);
+        if (networkManager != null)
+        {
+            networkManager.LeaveSession();
+        }
     }
 
     private void OnDisable()
     {
-        inputField_IPAddress.onValueChanged.RemoveAllListeners();
+        if (inputField_IPAddress != null)
+        {
+            inputField_IPAddress.onValueChanged.RemoveListener(OnIPAdressInput);
+        }
+
+        DungeonNetworkManager.ConnectionStateChanged -= OnConnectionStateChanged;
     }
 
     public void OnClickHostLobby()
     {
-        // insert mirror networking code here and load into MatchmakingLobby scene.
+        networkManager = DungeonNetworkManager.EnsureInstance();
+        if (networkManager == null)
+        {
+            return;
+        }
+
+        networkManager.StartLocalHost();
     }
 
     public void OnClickJoinLobby()
     {
         // show UI to let player insert ip address to join. this will be replaced by steam.net matchmaking later.
-        inputField_IPAddress.text = string.Empty; // clear IP
-
-        joinLobbyUI.DOFade(1.0f, 0.75f).OnComplete(() =>
+        if (inputField_IPAddress != null)
         {
-            joinLobbyUI.blocksRaycasts = true;
-            joinLobbyUI.interactable = true;
-        });
+            inputField_IPAddress.text = string.Empty; // clear IP
+        }
 
+        ShowCanvasGroup(joinLobbyUI, true);
     }
 
     public void OnClickConnectLobby()
     {
-        // insert mirror networking code here and load into MatchmakingLobby scene.
-        string targetIP = inputField_IPAddress.text;
-
+        networkManager = DungeonNetworkManager.EnsureInstance();
+        if (networkManager == null)
+        {
+            return;
+        }
 
         // while connecting, swap loading UI
-        joinLobbyUI.DOFade(0.0f, 0.75f);
-        joinLobbyUI.blocksRaycasts = false;
-        joinLobbyUI.interactable = false;
+        HideCanvasGroup(joinLobbyUI, true);
+        ShowCanvasGroup(loadingUI, false);
 
-        loadingUI.alpha = 1.0f;
-        loadingUI.blocksRaycasts = true;
-        loadingUI.interactable = true;
+        waitingForConnection = true;
+        string targetIP = inputField_IPAddress != null ? inputField_IPAddress.text : string.Empty;
+        networkManager.JoinLocalGame(targetIP);
 
         // if succeed call OnSuccessConnectLobby, if failed call OnFailedConnectLobby
     }
 
     public void OnClickCancelJoinLobby()
     {
-        joinLobbyUI.DOFade(0.0f, 0.75f);
-        joinLobbyUI.blocksRaycasts = false;
-        joinLobbyUI.interactable = false;
+        HideCanvasGroup(joinLobbyUI, true);
     }
 
     public void OnClickCancelLoadingLobby()
     {
         // treated as failure on UI
+        waitingForConnection = false;
+        if (networkManager != null)
+        {
+            networkManager.LeaveSession();
+        }
+
         OnFailedConnectLobby();
 
         // insert mirror networking code here to cancel connection
-
     }
 
     public void OnIPAdressInput(string input)
     {
-        connectLobbyBtn.interactable = (input.Length > 0);
+        if (connectLobbyBtn != null)
+        {
+            connectLobbyBtn.interactable = true;
+        }
     }
 
     public void OnSuccessConnectLobby()
     {
         // insert mirror networking code here and load into MatchmakingLobby scene.
-        loadingUI.interactable = false;
+        waitingForConnection = false;
+        if (loadingUI != null)
+        {
+            loadingUI.interactable = false;
+        }
     }
 
     public void OnFailedConnectLobby()
     {
         // swap back loading UI
-        joinLobbyUI.DOFade(1.0f, 0.75f).OnComplete(()=>
-        {
-            joinLobbyUI.blocksRaycasts = true;
-            joinLobbyUI.interactable = true;
-        });
+        waitingForConnection = false;
+        ShowCanvasGroup(joinLobbyUI, true);
+        HideCanvasGroup(loadingUI, true);
+    }
 
-        loadingUI.DOFade(0.0f, 0.75f);
-        loadingUI.blocksRaycasts = false;
-        loadingUI.interactable = false;
+    private void OnConnectionStateChanged(DungeonConnectionState state, string message)
+    {
+        if (!waitingForConnection)
+        {
+            return;
+        }
+
+        if (state == DungeonConnectionState.Connected)
+        {
+            OnSuccessConnectLobby();
+        }
+        else if (state == DungeonConnectionState.Failed || state == DungeonConnectionState.Disconnected)
+        {
+            OnFailedConnectLobby();
+        }
+    }
+
+    private void ShowCanvasGroup(CanvasGroup canvasGroup, bool fade)
+    {
+        if (canvasGroup == null)
+        {
+            return;
+        }
+
+        canvasGroup.blocksRaycasts = true;
+        canvasGroup.interactable = true;
+
+        if (fade)
+        {
+            canvasGroup.DOFade(1.0f, 0.75f);
+        }
+        else
+        {
+            canvasGroup.alpha = 1.0f;
+        }
+    }
+
+    private void HideCanvasGroup(CanvasGroup canvasGroup, bool fade)
+    {
+        if (canvasGroup == null)
+        {
+            return;
+        }
+
+        canvasGroup.blocksRaycasts = false;
+        canvasGroup.interactable = false;
+
+        if (fade)
+        {
+            canvasGroup.DOFade(0.0f, 0.75f);
+        }
+        else
+        {
+            canvasGroup.alpha = 0.0f;
+        }
     }
 
     public void OnClickQuit()
