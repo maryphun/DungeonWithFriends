@@ -28,6 +28,9 @@ public class NetworkSessionPlayer : NetworkBehaviour
     [SyncVar(hook = nameof(OnConnectionIdChanged))]
     private int connectionId = -1;
 
+    [SyncVar(hook = nameof(OnCharacterDataJsonChanged))]
+    private string characterDataJson = string.Empty;
+
     private CharacterSlotData characterData;
 
     public static event Action ClientStateChanged;
@@ -42,7 +45,25 @@ public class NetworkSessionPlayer : NetworkBehaviour
     public bool IsHost => isHost;
     public string PlayerName => playerName;
     public int ConnectionId => connectionId;
-    public CharacterSlotData CharacterData => characterData;
+    public string CharacterDataJson => characterDataJson;
+    public CharacterSlotData CharacterData
+    {
+        get
+        {
+            if (HasCharacterData(characterData))
+            {
+                return characterData;
+            }
+
+            if (CharacterSlotDataUtility.TryFromJson(characterDataJson, out CharacterSlotData parsedData))
+            {
+                characterData = parsedData;
+                return characterData;
+            }
+
+            return default;
+        }
+    }
 
     public string DisplayName
     {
@@ -100,6 +121,7 @@ public class NetworkSessionPlayer : NetworkBehaviour
         lobbyReady = readyByDefault;
         characterCreationReady = false;
         characterData = default;
+        characterDataJson = string.Empty;
         playerName = displayName;
     }
 
@@ -114,6 +136,7 @@ public class NetworkSessionPlayer : NetworkBehaviour
     {
         characterCreationReady = false;
         characterData = default;
+        characterDataJson = string.Empty;
     }
 
     [Server]
@@ -122,6 +145,7 @@ public class NetworkSessionPlayer : NetworkBehaviour
         acceptedData.slot = colorSlot;
         acceptedData.characterName = acceptedName;
         characterData = acceptedData;
+        characterDataJson = CharacterSlotDataUtility.ToJson(acceptedData);
         playerName = acceptedName;
         characterCreationReady = true;
     }
@@ -148,6 +172,18 @@ public class NetworkSessionPlayer : NetworkBehaviour
         }
 
         manager.ServerSubmitCharacter(this, data);
+    }
+
+    [Command]
+    public void CmdSubmitCharacterJson(string dataJson)
+    {
+        DungeonNetworkManager manager = DungeonNetworkManager.Active;
+        if (manager == null)
+        {
+            return;
+        }
+
+        manager.ServerSubmitCharacterJson(this, dataJson);
     }
 
     private void OnHasAssignedColorSlotChanged(bool oldValue, bool newValue)
@@ -183,6 +219,24 @@ public class NetworkSessionPlayer : NetworkBehaviour
     private void OnConnectionIdChanged(int oldValue, int newValue)
     {
         NotifyClientStateChanged();
+    }
+
+    private void OnCharacterDataJsonChanged(string oldValue, string newValue)
+    {
+        if (!CharacterSlotDataUtility.TryFromJson(newValue, out characterData))
+        {
+            characterData = default;
+        }
+
+        NotifyClientStateChanged();
+    }
+
+    private static bool HasCharacterData(CharacterSlotData data)
+    {
+        return !string.IsNullOrWhiteSpace(data.characterName) ||
+               data.parts != null && data.parts.Length > 0 ||
+               data.colors != null && data.colors.Length > 0 ||
+               data.visibility != null && data.visibility.Length > 0;
     }
 
     private static void NotifyClientStateChanged()

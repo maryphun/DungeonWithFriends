@@ -1,28 +1,129 @@
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
 public class PlayerPortrait : MonoBehaviour
 {
-    [SerializeField] PlayerController targetPlayer;
+    [SerializeField] private PlayerController targetPlayer;
+    public PlayerController TargetPlayer => targetPlayer;
+    public NetworkPlayerCharacter TargetCharacter => targetCharacter;
 
     [Header("References")]
-    [SerializeField] Image frame, fill;
+    [SerializeField] private Image frame;
+    [SerializeField] private Image fill;
+    [SerializeField] private TMP_Text playerNameText;
 
     [Header("Body parts")]
-    [SerializeField] PortraitBodyParts parts;
+    [SerializeField] private PortraitBodyParts parts;
 
     [Header("Sprite Data")]
-    [SerializeField] Sprite greenFrame;
-    [SerializeField] Sprite purpleFrame, redFrame, blueFrame;
+    [SerializeField] private Sprite greenFrame;
+    [SerializeField] private Sprite purpleFrame;
+    [SerializeField] private Sprite redFrame;
+    [SerializeField] private Sprite blueFrame;
     [Space(10)]
-    [SerializeField] Sprite greenFill;
-    [SerializeField] Sprite purpleFill, redFill, blueFill;
+    [SerializeField] private Sprite greenFill;
+    [SerializeField] private Sprite purpleFill;
+    [SerializeField] private Sprite redFill;
+    [SerializeField] private Sprite blueFill;
+
+    private NetworkPlayerCharacter targetCharacter;
+    private string displayName = "Player";
+    private PlayerColor playerColor = PlayerColor.Blue;
+
+    private void Awake()
+    {
+        ResolveReferences();
+    }
 
     private void Start()
     {
-        // change color
-        Sprite spriteFrame, spriteFill;
-        switch (targetPlayer.PlayerColor)
+        Refresh();
+    }
+
+    private void OnDestroy()
+    {
+        UnsubscribeFromTarget();
+    }
+
+    public void Configure(NetworkPlayerCharacter character)
+    {
+        if (targetCharacter == character)
+        {
+            Refresh();
+            return;
+        }
+
+        UnsubscribeFromTarget();
+        targetCharacter = character;
+
+        if (targetCharacter != null)
+        {
+            targetCharacter.AppearanceChanged += Refresh;
+            targetPlayer = targetCharacter.Controller;
+            displayName = targetCharacter.DisplayName;
+            playerColor = targetCharacter.PlayerColor;
+        }
+
+        Refresh();
+    }
+
+    public void Configure(PlayerController player, string portraitName, PlayerColor portraitColor)
+    {
+        UnsubscribeFromTarget();
+        targetCharacter = null;
+        targetPlayer = player;
+        displayName = string.IsNullOrWhiteSpace(portraitName) ? portraitColor.ToString() : portraitName;
+        playerColor = portraitColor;
+        Refresh();
+    }
+
+    public void Refresh()
+    {
+        ResolveReferences();
+
+        if (targetCharacter != null)
+        {
+            targetPlayer = targetCharacter.Controller;
+            displayName = targetCharacter.DisplayName;
+            playerColor = targetCharacter.PlayerColor;
+        }
+        else if (targetPlayer != null)
+        {
+            displayName = targetPlayer.DisplayName;
+            playerColor = targetPlayer.PlayerColor;
+        }
+
+        ApplyColorSprites(playerColor);
+
+        if (playerNameText != null)
+        {
+            playerNameText.text = displayName;
+            playerNameText.color = PlayerColorUtility.ToUnityColor(playerColor);
+        }
+
+        if (targetPlayer == null)
+        {
+            return;
+        }
+
+        CopyAppearanceFrom(targetPlayer.Parts);
+    }
+
+    private void UnsubscribeFromTarget()
+    {
+        if (targetCharacter != null)
+        {
+            targetCharacter.AppearanceChanged -= Refresh;
+        }
+    }
+
+    private void ApplyColorSprites(PlayerColor color)
+    {
+        Sprite spriteFrame;
+        Sprite spriteFill;
+
+        switch (color)
         {
             case PlayerColor.Green:
                 spriteFrame = greenFrame;
@@ -43,53 +144,63 @@ public class PlayerPortrait : MonoBehaviour
                 break;
         }
 
-        frame.sprite = spriteFrame;
-        fill.sprite = spriteFill;
+        if (frame != null && spriteFrame != null)
+        {
+            frame.sprite = spriteFrame;
+        }
 
-        // copy player appearance
-        // body
-        var originBody = targetPlayer.Parts.body;
-        parts.body.sprite = originBody.sprite;
-        parts.body.color = originBody.color;
+        if (fill != null && spriteFill != null)
+        {
+            fill.sprite = spriteFill;
+        }
+    }
 
-        // chest
-        var originChest = targetPlayer.Parts.chest;
-        parts.chest.sprite = originChest.sprite;
-        parts.chest.color = originChest.color;
-        parts.chest.gameObject.SetActive(originChest.gameObject.activeSelf);
+    private void CopyAppearanceFrom(PlayerBodyParts source)
+    {
+        CopyRenderer(source.body, parts.body, true);
+        CopyRenderer(source.chest, parts.chest, source.chest != null && source.chest.gameObject.activeSelf);
+        CopyRenderer(source.head, parts.head, true);
+        CopyRenderer(source.eye, parts.eye, true);
+        CopyRenderer(source.hair, parts.hair, source.hair != null && source.hair.gameObject.activeSelf);
+        CopyRenderer(source.hair_helmet, parts.hair_helmet, source.hair_helmet != null && source.hair_helmet.gameObject.activeSelf);
+        CopyRenderer(source.helmet, parts.helmet, source.helmet != null && source.helmet.gameObject.activeSelf);
+        CopyRenderer(source.beard, parts.beard, source.beard != null && source.beard.gameObject.activeSelf);
+    }
 
-        // head
-        var originHead = targetPlayer.Parts.head;
-        parts.head.sprite = originHead.sprite;
-        parts.head.color = originHead.color;
+    private static void CopyRenderer(SpriteRenderer source, Image target, bool active)
+    {
+        if (target == null)
+        {
+            return;
+        }
 
-        // eye
-        var originEye = targetPlayer.Parts.eye;
-        parts.eye.sprite = originEye.sprite;
-        parts.eye.color = originEye.color;
+        target.gameObject.SetActive(active && source != null && source.sprite != null);
 
-        // hair
-        var originHair = targetPlayer.Parts.hair;
-        parts.hair.sprite = originHair.sprite;
-        parts.hair.color = originHair.color;
-        parts.hair.gameObject.SetActive(originHair.gameObject.activeSelf);
+        if (source == null)
+        {
+            return;
+        }
 
-        // hair helmet
-        var originHairHelmet = targetPlayer.Parts.hair_helmet;
-        parts.hair_helmet.sprite = originHairHelmet.sprite;
-        parts.hair_helmet.color = originHairHelmet.color;
-        parts.hair_helmet.gameObject.SetActive(originHairHelmet.gameObject.activeSelf);
+        target.sprite = source.sprite;
+        target.color = source.color;
+    }
 
-        // helmet
-        var originHelmet = targetPlayer.Parts.helmet;
-        parts.helmet.sprite = originHelmet.sprite;
-        parts.helmet.color = originHelmet.color;
-        parts.helmet.gameObject.SetActive(originHelmet.gameObject.activeSelf);
+    private void ResolveReferences()
+    {
+        if (frame == null)
+        {
+            Transform frameTransform = transform.Find("frame");
+            frame = frameTransform != null ? frameTransform.GetComponent<Image>() : null;
+        }
 
-        // beard
-        var originBeard = targetPlayer.Parts.beard;
-        parts.beard.sprite = originBeard.sprite;
-        parts.beard.color = originBeard.color;
-        parts.beard.gameObject.SetActive(originBeard.gameObject.activeSelf);
+        if (fill == null)
+        {
+            fill = GetComponent<Image>();
+        }
+
+        if (playerNameText == null)
+        {
+            playerNameText = GetComponentInChildren<TMP_Text>(true);
+        }
     }
 }

@@ -301,8 +301,8 @@ public class CharacterCreator : MonoBehaviour
         }
 
         string characterName = inputField != null ? inputField.text : string.Empty;
-        CharacterSlotData data = CharacterSlotDataUtility.FromPreset(localPlayer.ColorSlot, characterName, player.PartsManager.ToPresetItem());
-        localPlayer.CmdSubmitCharacter(data);
+        CharacterSlotData data = CharacterSlotDataUtility.FromPartsManager(localPlayer.ColorSlot, characterName, player.PartsManager);
+        localPlayer.CmdSubmitCharacterJson(CharacterSlotDataUtility.ToJson(data));
         submittedCharacter = true;
     }
 

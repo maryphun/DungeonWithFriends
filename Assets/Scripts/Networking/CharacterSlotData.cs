@@ -19,6 +19,7 @@ public struct CharacterPartSelection
 {
     public PartsType type;
     public int index;
+    public string spriteName;
 }
 
 [Serializable]
@@ -72,6 +73,7 @@ public static class CharacterSlotDataNetworkSerialization
         {
             writer.WriteInt((int)values[i].type);
             writer.WriteInt(values[i].index);
+            writer.WriteString(values[i].spriteName);
         }
     }
 
@@ -86,7 +88,8 @@ public static class CharacterSlotDataNetworkSerialization
             CharacterPartSelection value = new CharacterPartSelection
             {
                 type = (PartsType)reader.ReadInt(),
-                index = reader.ReadInt()
+                index = reader.ReadInt(),
+                spriteName = reader.ReadString()
             };
 
             if (i < storedCount)
@@ -172,6 +175,47 @@ public static class CharacterSlotDataNetworkSerialization
 
 public static class CharacterSlotDataUtility
 {
+    public static CharacterSlotData FromPartsManager(PlayerColor slot, string characterName, PartsManager partsManager)
+    {
+        CharacterSlotData data = FromPreset(slot, characterName, partsManager != null ? partsManager.ToPresetItem() : null);
+        if (partsManager == null || data.parts == null)
+        {
+            return data;
+        }
+
+        for (int i = 0; i < data.parts.Length; i++)
+        {
+            data.parts[i].spriteName = partsManager.GetActiveSpriteName(data.parts[i].type);
+        }
+
+        return data;
+    }
+
+    public static string ToJson(CharacterSlotData data)
+    {
+        return JsonUtility.ToJson(data);
+    }
+
+    public static bool TryFromJson(string json, out CharacterSlotData data)
+    {
+        data = default;
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return false;
+        }
+
+        try
+        {
+            data = JsonUtility.FromJson<CharacterSlotData>(json);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            Debug.LogWarning($"Could not parse character data: {exception.Message}");
+            return false;
+        }
+    }
+
     public static CharacterSlotData FromPreset(PlayerColor slot, string characterName, PresetData.PresetItem item)
     {
         CharacterSlotData data = new CharacterSlotData
@@ -196,7 +240,8 @@ public static class CharacterSlotDataUtility
                 data.parts[i] = new CharacterPartSelection
                 {
                     type = item.parts[i].type,
-                    index = item.parts[i].index
+                    index = item.parts[i].index,
+                    spriteName = string.Empty
                 };
             }
         }

@@ -1,13 +1,23 @@
-using UnityEngine;
 using DG.Tweening;
+using LayerLab.ArtMakerUnity;
+using UnityEngine;
 
 public class PlayerController : MonoBehaviour
 {
     [Header("References")]
     [SerializeField] private Transform targetPlayer;
     public Transform TargetPlayer => targetPlayer;
+
     [SerializeField] private PlayerBodyParts parts;
     public PlayerBodyParts Parts => parts;
+
+    public PartsManager PartsManager => partsManager;
+    public string DisplayName => displayName;
+    public bool IsLocalControlEnabled => localInputEnabled;
+    public bool IsCurrentlyWalking => previousWalkingState;
+    public bool IsFacingRight => facingRight;
+    public Vector3 RightHandPivotLocalPosition => rightHandAimPivot != null ? rightHandAimPivot.localPosition : Vector3.zero;
+    public Quaternion RightHandPivotLocalRotation => rightHandAimPivot != null ? rightHandAimPivot.localRotation : Quaternion.identity;
 
     [Header("Stats")]
     [SerializeField] public UnitStats stats;
@@ -15,6 +25,10 @@ public class PlayerController : MonoBehaviour
     [Header("Settings")]
     [SerializeField] private PlayerColor playerColor = PlayerColor.Blue;
     public PlayerColor PlayerColor => playerColor;
+
+    [Header("Control")]
+    [SerializeField] private bool localInputEnabled = true;
+    [SerializeField] private bool cameraFollowEnabled = true;
 
     [Header("Character Facing")]
     [Tooltip("Enable this when the original character artwork faces right.")]
@@ -38,6 +52,7 @@ public class PlayerController : MonoBehaviour
     [Header("Camera Follow")]
     [SerializeField] private float cameraSmoothTime = 0.25f;
 
+    private PartsManager partsManager;
     private Animator animator;
     private Camera mainCamera;
     private Transform rightHandAimPivot;
@@ -53,90 +68,99 @@ public class PlayerController : MonoBehaviour
 
     private int attackLayerIndex = -1;
 
+    private string displayName = "Player";
     private bool facingRight = true;
     private bool previousWalkingState;
     private bool baseAnimationInitialized;
-    private bool isSwitchingSide = false;
+    private bool initialized;
+    private bool isSwitchingSide;
 
     private PlayerActionBuffer nextActionBuffer = PlayerActionBuffer.None;
 
+    private void Awake()
+    {
+        ResolveReferences();
+    }
+
     private void Start()
     {
+        if (!EnsureInitialized())
+        {
+            enabled = false;
+        }
+    }
+
+    public void ConfigureForGameplay(PlayerColor assignedColor, string assignedName, bool allowLocalControl)
+    {
+        playerColor = assignedColor;
+        displayName = string.IsNullOrWhiteSpace(assignedName) ? assignedColor.ToString() : assignedName;
+        SetLocalControlEnabled(allowLocalControl);
+
+        if (EnsureInitialized())
+        {
+            SetupShadowOutline(playerColor);
+        }
+    }
+
+    public void SetLocalControlEnabled(bool allowLocalControl)
+    {
+        localInputEnabled = allowLocalControl;
+        cameraFollowEnabled = allowLocalControl;
+
+        if (allowLocalControl)
+        {
+            EnsureCameraAvailable();
+        }
+    }
+
+    public bool EnsureInitialized()
+    {
+        if (initialized)
+        {
+            return !localInputEnabled && !cameraFollowEnabled || EnsureCameraAvailable();
+        }
+
+        ResolveReferences();
+
         if (targetPlayer == null)
         {
-            Debug.LogError(
-                "Target Player has not been assigned.",
-                this
-            );
-
-            enabled = false;
-            return;
+            Debug.LogError("Target Player has not been assigned.", this);
+            return false;
         }
 
         rightHandAimPivot = targetPlayer.Find("RightHandPivot");
 
         if (rightHandAimPivot == null)
         {
-            Debug.LogError(
-                "RightHandPivot could not be found under Target Player.",
-                targetPlayer
-            );
-
-            enabled = false;
-            return;
+            Debug.LogError("RightHandPivot could not be found under Target Player.", targetPlayer);
+            return false;
         }
 
         rightHandPivotOriginalPosition = rightHandAimPivot.localPosition;
-
         animator = targetPlayer.GetComponent<Animator>();
 
         if (animator == null)
         {
-            Debug.LogError(
-                "Target Player does not have an Animator component.",
-                targetPlayer
-            );
-
-            enabled = false;
-            return;
+            Debug.LogError("Target Player does not have an Animator component.", targetPlayer);
+            return false;
         }
 
-        mainCamera = Camera.main;
-
-        if (mainCamera == null)
+        if ((localInputEnabled || cameraFollowEnabled) && !EnsureCameraAvailable())
         {
-            mainCamera =
-                FindFirstObjectByType<Camera>();
-        }
-
-        if (mainCamera == null)
-        {
-            Debug.LogError(
-                "No camera could be found.",
-                this
-            );
-
-            enabled = false;
-            return;
+            return false;
         }
 
         originalPlayerScale = targetPlayer.localScale;
-
+        facingRight = targetPlayer.localScale.x >= 0f;
         attackLayerIndex = animator.GetLayerIndex("Attack");
 
         if (attackLayerIndex >= 0)
         {
-            animator.SetLayerWeight(
-                attackLayerIndex,
-                1f
-            );
+            animator.SetLayerWeight(attackLayerIndex, 1f);
         }
         else
         {
-            Debug.LogWarning(
-                "Animator layer named 'Attack' was not found.",
-                animator
-            );
+            Debug.LogWarning("Animator layer named 'Attack' was not found.", animator);
         }
 
         CharacterAnimationEvents animationEvents = animator.GetComponent<CharacterAnimationEvents>();
@@ -147,13 +171,183 @@ public class PlayerController : MonoBehaviour
         }
 
         animationEvents.Setup(this);
-
-        // setup color
         SetupShadowOutline(playerColor);
+        initialized = true;
+        return true;
+    }
+
+    public void ApplyCharacterData(CharacterSlotData data)
+    {
+        ResolveReferences();
+
+        if (partsManager == null)
+        {
+            Debug.LogWarning("Cannot apply character data because this player has no PartsManager.", this);
+            return;
+        }
+
+        partsManager.Init();
+        partsManager.ApplyPresetItem(CharacterSlotDataUtility.ToPresetItem(data));
+        ApplySpriteNameOverrides(data);
+        ApplyVisibilitySelections(data);
+        ApplyExclusiveEquipmentGroup(data, UICategory.HandRight);
+        ApplyExclusiveEquipmentGroup(data, UICategory.HandLeft);
+    }
+
+    private void ApplySpriteNameOverrides(CharacterSlotData data)
+    {
+        if (data.parts == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < data.parts.Length; i++)
+        {
+            CharacterPartSelection selection = data.parts[i];
+            if (!string.IsNullOrWhiteSpace(selection.spriteName))
+            {
+                partsManager.TryEquipPartBySpriteName(selection.type, selection.spriteName);
+            }
+        }
+    }
+
+    private void ApplyVisibilitySelections(CharacterSlotData data)
+    {
+        if (data.visibility == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < data.visibility.Length; i++)
+        {
+            PartsType type = data.visibility[i].type;
+            if (type == PartsType.Arrow || type == PartsType.HelmetHair)
+            {
+                continue;
+            }
+
+            if (partsManager.CanToggle(type))
+            {
+                partsManager.ToggleParts(type, data.visibility[i].visible);
+            }
+        }
+    }
+
+    private void ApplyExclusiveEquipmentGroup(CharacterSlotData data, UICategory category)
+    {
+        PartsType[] groupTypes = UICategoryConfig.GetSubTypes(category);
+        if (groupTypes.Length <= 1 || !TryGetVisibleGroupType(data, groupTypes, out PartsType visibleType))
+        {
+            return;
+        }
+
+        if (TryGetPartSelection(data, visibleType, out CharacterPartSelection visibleSelection))
+        {
+            if (string.IsNullOrWhiteSpace(visibleSelection.spriteName) ||
+                !partsManager.TryEquipPartBySpriteName(visibleType, visibleSelection.spriteName))
+            {
+                if (visibleSelection.index >= 0)
+                {
+                    partsManager.EquipParts(visibleType, visibleSelection.index);
+                }
+            }
+        }
+
+        if (partsManager.CanToggle(visibleType))
+        {
+            partsManager.ToggleParts(visibleType, true);
+        }
+
+        for (int i = 0; i < groupTypes.Length; i++)
+        {
+            PartsType type = groupTypes[i];
+            if (type == visibleType || !partsManager.CanToggle(type))
+            {
+                continue;
+            }
+
+            partsManager.ToggleParts(type, false);
+        }
+    }
+
+    private static bool TryGetVisibleGroupType(CharacterSlotData data, PartsType[] groupTypes, out PartsType visibleType)
+    {
+        visibleType = default;
+        if (data.visibility == null)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < data.visibility.Length; i++)
+        {
+            if (!data.visibility[i].visible || !ContainsPartType(groupTypes, data.visibility[i].type))
+            {
+                continue;
+            }
+
+            visibleType = data.visibility[i].type;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetPartSelection(CharacterSlotData data, PartsType type, out CharacterPartSelection selection)
+    {
+        selection = default;
+        if (data.parts == null)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < data.parts.Length; i++)
+        {
+            if (data.parts[i].type != type)
+            {
+                continue;
+            }
+
+            selection = data.parts[i];
+            return selection.index >= 0 || !string.IsNullOrWhiteSpace(selection.spriteName);
+        }
+
+        return false;
+    }
+
+    private static bool ContainsPartType(PartsType[] types, PartsType type)
+    {
+        for (int i = 0; i < types.Length; i++)
+        {
+            if (types[i] == type)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public void ApplyRemoteVisualState(bool walking, bool remoteFacingRight, Vector3 pivotLocalPosition, Quaternion pivotLocalRotation)
+    {
+        if (localInputEnabled || !EnsureInitialized())
+        {
+            return;
+        }
+
+        facingRight = remoteFacingRight;
+        ApplyFacingScale(facingRight, false);
+        rightHandAimPivot.localPosition = pivotLocalPosition;
+        rightHandAimPivot.localRotation = pivotLocalRotation;
+        UpdateBaseAnimation(walking);
     }
 
     private void Update()
     {
+        if (!localInputEnabled || !EnsureInitialized())
+        {
+            return;
+        }
+
         bool isWalking = UpdateMovement();
 
         UpdateFacing();
@@ -186,18 +380,13 @@ public class PlayerController : MonoBehaviour
             movementInput.y -= 1f;
         }
 
-        // Prevent diagonal movement from being faster.
         if (movementInput.sqrMagnitude > 1f)
         {
             movementInput.Normalize();
         }
 
-        targetPlayer.position +=
-            new Vector3(
-                movementInput.x,
-                movementInput.y,
-                0f
-            ) * stats.movementSpeed * Time.deltaTime;
+        float movementSpeed = Mathf.Max(0f, stats.movementSpeed);
+        targetPlayer.position += new Vector3(movementInput.x, movementInput.y, 0f) * movementSpeed * Time.deltaTime;
 
         return movementInput.sqrMagnitude > 0.001f;
     }
@@ -207,17 +396,11 @@ public class PlayerController : MonoBehaviour
         if (IsAttacking()) return;
 
         Vector3 mouseScreenPosition = Input.mousePosition;
-
-        mouseScreenPosition.z = Mathf.Abs(
-            targetPlayer.position.z -
-            mainCamera.transform.position.z
-        );
+        mouseScreenPosition.z = Mathf.Abs(targetPlayer.position.z - mainCamera.transform.position.z);
 
         Vector3 mouseWorldPosition = mainCamera.ScreenToWorldPoint(mouseScreenPosition);
-
         Vector2 directionFromPlayer = mouseWorldPosition - targetPlayer.position;
 
-        // Keep the previous facing direction when aiming almost vertically.
         if (directionFromPlayer.x > facingDeadZone)
         {
             facingRight = true;
@@ -227,23 +410,32 @@ public class PlayerController : MonoBehaviour
             facingRight = false;
         }
 
-        float facingSign;
+        ApplyFacingScale(facingRight, true);
+    }
 
-        if (spriteFacesRight)
-        {
-            facingSign = facingRight ? 1f : -1f;
-        }
-        else
-        {
-            facingSign = facingRight ? -1f : 1f;
-        }
+    private void ApplyFacingScale(bool targetFacingRight, bool animate)
+    {
+        float facingSign = spriteFacesRight
+            ? targetFacingRight ? 1f : -1f
+            : targetFacingRight ? -1f : 1f;
 
         float targetScaleX = Mathf.Abs(originalPlayerScale.x) * facingSign;
 
-        if (!Mathf.Approximately(targetPlayer.localScale.x, targetScaleX) && !isSwitchingSide)
+        if (Mathf.Approximately(targetPlayer.localScale.x, targetScaleX))
+        {
+            return;
+        }
+
+        if (!animate)
+        {
+            Vector3 scale = targetPlayer.localScale;
+            targetPlayer.localScale = new Vector3(targetScaleX, scale.y, scale.z);
+            return;
+        }
+
+        if (!isSwitchingSide)
         {
             isSwitchingSide = true;
-
             targetPlayer.DOScaleX(targetScaleX, 0.05f).OnComplete(() => isSwitchingSide = false);
         }
     }
@@ -253,29 +445,15 @@ public class PlayerController : MonoBehaviour
         if (IsAttacking()) return;
 
         Vector3 mouseScreenPosition = Input.mousePosition;
-
         Transform aimCoordinateSpace = rightHandAimPivot.parent;
 
-        mouseScreenPosition.z = Mathf.Abs(
-            targetPlayer.position.z -
-            mainCamera.transform.position.z
-        );
-
+        mouseScreenPosition.z = Mathf.Abs(targetPlayer.position.z - mainCamera.transform.position.z);
         Vector3 mouseWorldPosition = mainCamera.ScreenToWorldPoint(mouseScreenPosition);
-
         Vector3 localMousePosition = aimCoordinateSpace.InverseTransformPoint(mouseWorldPosition);
 
-        /*
-         * First calculate the general aim direction from the pivot's
-         * original position. This prevents the offset from affecting
-         * the amount of offset being calculated.
-         */
         Vector2 baseAimDirection = new Vector2(
-            localMousePosition.x -
-            rightHandPivotOriginalPosition.x,
-
-            localMousePosition.y -
-            rightHandPivotOriginalPosition.y
+            localMousePosition.x - rightHandPivotOriginalPosition.x,
+            localMousePosition.y - rightHandPivotOriginalPosition.y
         );
 
         if (baseAimDirection.sqrMagnitude < 0.0001f)
@@ -283,82 +461,30 @@ public class PlayerController : MonoBehaviour
             return;
         }
 
-        Vector2 normalizedDirection =
-            baseAimDirection.normalized;
-
-        /*
-         * 0 when aiming horizontally or downward.
-         * 1 when aiming directly upward.
-         */
+        Vector2 normalizedDirection = baseAimDirection.normalized;
         float upwardAmount = Mathf.Clamp01(normalizedDirection.y);
-
-        // Makes the transition softer near horizontal directions.
         upwardAmount = Mathf.SmoothStep(0f, 1f, upwardAmount);
 
         float targetOffset = upwardAmount * upwardHandOffset;
+        float targetHorizontalOffset = normalizedDirection.x * upwardAmount * upwardHorizontalOffset;
 
-        float targetHorizontalOffset =
-            normalizedDirection.x *
-            upwardAmount *
-            upwardHorizontalOffset;
+        currentUpwardOffset = Mathf.SmoothDamp(currentUpwardOffset, targetOffset, ref upwardOffsetVelocity, upwardOffsetSmoothTime);
+        currentHorizontalOffset = Mathf.SmoothDamp(currentHorizontalOffset, targetHorizontalOffset, ref horizontalOffsetVelocity, upwardOffsetSmoothTime);
 
-        currentUpwardOffset =
-            Mathf.SmoothDamp(
-                currentUpwardOffset,
-                targetOffset,
-                ref upwardOffsetVelocity,
-                upwardOffsetSmoothTime
-            );
+        rightHandAimPivot.localPosition = rightHandPivotOriginalPosition + new Vector3(currentHorizontalOffset, currentUpwardOffset, 0f);
 
-        currentHorizontalOffset =
-            Mathf.SmoothDamp(
-                currentHorizontalOffset,
-                targetHorizontalOffset,
-                ref horizontalOffsetVelocity,
-                upwardOffsetSmoothTime
-            );
-
-        rightHandAimPivot.localPosition =
-            rightHandPivotOriginalPosition +
-            new Vector3(
-                currentHorizontalOffset,
-                currentUpwardOffset,
-                0f
-            );
-
-        /*
-         * Recalculate the direction using the pivot's newly adjusted
-         * position so the weapon still points precisely at the mouse.
-         */
         Vector2 finalAimDirection = new Vector2(
-            localMousePosition.x -
-            rightHandAimPivot.localPosition.x,
-
-            localMousePosition.y -
-            rightHandAimPivot.localPosition.y
+            localMousePosition.x - rightHandAimPivot.localPosition.x,
+            localMousePosition.y - rightHandAimPivot.localPosition.y
         );
 
-        float localAimAngle =
-            Mathf.Atan2(
-                finalAimDirection.y,
-                finalAimDirection.x
-            ) * Mathf.Rad2Deg;
-
-        rightHandAimPivot.localRotation =
-            Quaternion.Euler(
-                0f,
-                0f,
-                localAimAngle + angleOffset
-            );
+        float localAimAngle = Mathf.Atan2(finalAimDirection.y, finalAimDirection.x) * Mathf.Rad2Deg;
+        rightHandAimPivot.localRotation = Quaternion.Euler(0f, 0f, localAimAngle + angleOffset);
     }
 
     private void UpdateBaseAnimation(bool isWalking)
     {
-        // Do not restart Idle or Run every frame.
-        if (
-            baseAnimationInitialized &&
-            previousWalkingState == isWalking
-        )
+        if (baseAnimationInitialized && previousWalkingState == isWalking)
         {
             return;
         }
@@ -366,14 +492,8 @@ public class PlayerController : MonoBehaviour
         baseAnimationInitialized = true;
         previousWalkingState = isWalking;
 
-        string stateName =
-            isWalking ? "Run" : "Idle";
-
-        animator.CrossFadeInFixedTime(
-            stateName,
-            0.05f,
-            0
-        );
+        string stateName = isWalking ? "Run" : "Idle";
+        animator.CrossFadeInFixedTime(stateName, 0.05f, 0);
     }
 
     private void UpdateAttack()
@@ -390,12 +510,7 @@ public class PlayerController : MonoBehaviour
 
         if (attackLayerIndex < 0)
         {
-            Debug.LogWarning(
-                "Attack1 cannot be played because the " +
-                "Attack animation layer was not found.",
-                animator
-            );
-
+            Debug.LogWarning("Attack1 cannot be played because the Attack animation layer was not found.", animator);
             return;
         }
 
@@ -405,59 +520,119 @@ public class PlayerController : MonoBehaviour
         }
         else
         {
-            // save or override the input for later
             nextActionBuffer = PlayerActionBuffer.Attack;
         }
     }
 
     private bool IsAttacking()
     {
-        return !animator.GetCurrentAnimatorStateInfo(attackLayerIndex).IsName("Nothing");
+        return attackLayerIndex >= 0 && !animator.GetCurrentAnimatorStateInfo(attackLayerIndex).IsName("Nothing");
     }
 
     private void LateUpdate()
     {
-        if (targetPlayer == null || mainCamera == null)
+        if (!cameraFollowEnabled || targetPlayer == null)
         {
             return;
         }
 
-        Vector3 targetCameraPosition =
-            new Vector3(
-                targetPlayer.position.x,
-                targetPlayer.position.y,
-                mainCamera.transform.position.z
-            );
-
-        mainCamera.transform.position =
-            Vector3.SmoothDamp(
-                mainCamera.transform.position,
-                targetCameraPosition,
-                ref cameraVelocity,
-                cameraSmoothTime
-            );
-    }
-
-    private void SetupShadowOutline(PlayerColor playerColor)
-    {
-        Color color = Color.white;
-        switch (playerColor)
+        if (mainCamera == null)
         {
-            case PlayerColor.Green:
-                color = Color.green;
-                break;
-            case PlayerColor.Purple:
-                color = Color.purple;
-                break;
-            case PlayerColor.Red:
-                color = Color.red;
-                break;
-            case PlayerColor.Blue:
-            default:
-                color = Color.blue;
-                break;
+            mainCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
         }
 
-        parts.shadow.material.SetColor("_OutlineColor", color);
+        if (mainCamera == null)
+        {
+            return;
+        }
+
+        Vector3 targetCameraPosition = new Vector3(targetPlayer.position.x, targetPlayer.position.y, mainCamera.transform.position.z);
+        mainCamera.transform.position = Vector3.SmoothDamp(mainCamera.transform.position, targetCameraPosition, ref cameraVelocity, cameraSmoothTime);
+    }
+
+    private bool EnsureCameraAvailable()
+    {
+        if (mainCamera != null)
+        {
+            return true;
+        }
+
+        mainCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+        if (mainCamera != null)
+        {
+            return true;
+        }
+
+        Debug.LogError("No camera could be found.", this);
+        return false;
+    }
+
+    private void SetupShadowOutline(PlayerColor outlineColor)
+    {
+        if (parts.shadow == null || parts.shadow.material == null)
+        {
+            return;
+        }
+
+        parts.shadow.material.SetColor("_OutlineColor", PlayerColorUtility.ToUnityColor(outlineColor));
+    }
+
+    private void ResolveReferences()
+    {
+        if (targetPlayer == null)
+        {
+            targetPlayer = transform;
+        }
+
+        partsManager = targetPlayer.GetComponent<PartsManager>();
+        if (partsManager == null)
+        {
+            partsManager = targetPlayer.GetComponentInChildren<PartsManager>(true);
+        }
+
+        parts.body = parts.body != null ? parts.body : FindRenderer("Body");
+        parts.chest = parts.chest != null ? parts.chest : FindRenderer("Chest");
+        parts.head = parts.head != null ? parts.head : FindRenderer("Head");
+        parts.eye = parts.eye != null ? parts.eye : FindRenderer("Eye");
+        parts.hair = parts.hair != null ? parts.hair : FindRenderer("Hair");
+        parts.hair_helmet = parts.hair_helmet != null ? parts.hair_helmet : FindRenderer("Hair_Helmet");
+        parts.helmet = parts.helmet != null ? parts.helmet : FindRenderer("Helmet");
+        parts.beard = parts.beard != null ? parts.beard : FindRenderer("Beard");
+        parts.shadow = parts.shadow != null ? parts.shadow : FindRenderer("Shadow");
+    }
+
+    private SpriteRenderer FindRenderer(string childName)
+    {
+        if (targetPlayer == null)
+        {
+            return null;
+        }
+
+        Transform child = FindDeepChild(targetPlayer, childName);
+        return child != null ? child.GetComponent<SpriteRenderer>() : null;
+    }
+
+    private static Transform FindDeepChild(Transform root, string childName)
+    {
+        if (root == null)
+        {
+            return null;
+        }
+
+        if (root.name == childName)
+        {
+            return root;
+        }
+
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform found = FindDeepChild(root.GetChild(i), childName);
+            if (found != null)
+            {
+                return found;
+            }
+        }
+
+        return null;
     }
 }

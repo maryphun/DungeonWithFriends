@@ -32,6 +32,8 @@ public class DungeonNetworkManager : NetworkManager
     private const int MaxPartEntries = 32;
     private const int MaxColorEntries = 8;
     private const int MaxVisibilityEntries = 32;
+    private const int MaxCharacterDataJsonLength = 16384;
+    private const int MaxSpriteNameLength = 128;
     private const float GameSceneTransitionDelay = 1.5f;
 
     private static readonly PlayerColor[] SlotOrder =
@@ -44,10 +46,12 @@ public class DungeonNetworkManager : NetworkManager
 
     [Header("Dungeon Lobby")]
     [SerializeField] private GameObject sessionPlayerPrefab;
+    [SerializeField] private GameObject gameplayPlayerPrefab;
     [SerializeField] private int minimumPlayersToStart = 1;
     [SerializeField] private ushort runtimePort = 7777;
 
     private readonly List<NetworkSessionPlayer> serverSessionPlayers = new List<NetworkSessionPlayer>();
+    private readonly Dictionary<int, NetworkPlayerCharacter> serverGameplayCharacters = new Dictionary<int, NetworkPlayerCharacter>();
     private DungeonConnectionState connectionState = DungeonConnectionState.Offline;
     private bool clientJoinInProgress;
     private Coroutine gameSceneTransitionCoroutine;
@@ -294,6 +298,30 @@ public class DungeonNetworkManager : NetworkManager
         ServerTryStartGameWhenCharactersReady();
     }
 
+    [Server]
+    public void ServerSubmitCharacterJson(NetworkSessionPlayer player, string dataJson)
+    {
+        if (string.IsNullOrWhiteSpace(dataJson))
+        {
+            Debug.LogWarning("Character submission payload is empty.");
+            return;
+        }
+
+        if (dataJson.Length > MaxCharacterDataJsonLength)
+        {
+            Debug.LogWarning("Character submission payload is too large.");
+            return;
+        }
+
+        if (!CharacterSlotDataUtility.TryFromJson(dataJson, out CharacterSlotData data))
+        {
+            Debug.LogWarning("Character submission payload could not be parsed.");
+            return;
+        }
+
+        ServerSubmitCharacter(player, data);
+    }
+
     public string GetDisplayAddress()
     {
         if (NetworkServer.active)
@@ -340,6 +368,7 @@ public class DungeonNetworkManager : NetworkManager
             gameSceneTransitionCoroutine = null;
         }
 
+        serverGameplayCharacters.Clear();
         serverSessionPlayers.Clear();
         base.OnStopServer();
         RaiseLobbyChanged();
@@ -347,6 +376,7 @@ public class DungeonNetworkManager : NetworkManager
 
     public override void OnClientConnect()
     {
+        RegisterClientGameplayPrefab();
         clientJoinInProgress = false;
         SetConnectionState(DungeonConnectionState.Connected, "Connected.");
         base.OnClientConnect();
@@ -421,6 +451,8 @@ public class DungeonNetworkManager : NetworkManager
 
     public override void OnServerDisconnect(NetworkConnectionToClient conn)
     {
+        DestroyServerGameplayCharacter(conn.connectionId);
+
         if (conn.identity != null)
         {
             NetworkSessionPlayer sessionPlayer = conn.identity.GetComponent<NetworkSessionPlayer>();
@@ -442,7 +474,42 @@ public class DungeonNetworkManager : NetworkManager
     public override void OnServerSceneChanged(string sceneName)
     {
         base.OnServerSceneChanged(sceneName);
+
+        if (sceneName == GameSceneName)
+        {
+            PrepareGameSceneClient();
+            ServerSpawnGameCharacters();
+        }
+
         RaiseLobbyChanged();
+    }
+
+    public override void OnServerReady(NetworkConnectionToClient conn)
+    {
+        base.OnServerReady(conn);
+
+        if (SceneManager.GetActiveScene().name == GameSceneName)
+        {
+            ServerSpawnGameCharacterForConnection(conn);
+        }
+    }
+
+    public override void OnClientSceneChanged()
+    {
+        RegisterClientGameplayPrefab();
+
+        if (SceneManager.GetActiveScene().name == GameSceneName)
+        {
+            PrepareGameSceneClient();
+        }
+
+        base.OnClientSceneChanged();
+    }
+
+    public override void OnStartClient()
+    {
+        RegisterClientGameplayPrefab();
+        base.OnStartClient();
     }
 
     private void ConfigureDefaults()
@@ -467,6 +534,16 @@ public class DungeonNetworkManager : NetworkManager
             playerPrefab = sessionPlayerPrefab;
         }
 
+        if (gameplayPlayerPrefab == null)
+        {
+            gameplayPlayerPrefab = Resources.Load<GameObject>("NetworkPlayerCharacter");
+        }
+
+        if (gameplayPlayerPrefab != null && !spawnPrefabs.Contains(gameplayPlayerPrefab))
+        {
+            spawnPrefabs.Add(gameplayPlayerPrefab);
+        }
+
         dontDestroyOnLoad = true;
         runInBackground = true;
         autoCreatePlayer = true;
@@ -489,6 +566,8 @@ public class DungeonNetworkManager : NetworkManager
             StopCoroutine(gameSceneTransitionCoroutine);
             gameSceneTransitionCoroutine = null;
         }
+
+        serverGameplayCharacters.Clear();
 
         for (int i = 0; i < serverSessionPlayers.Count; i++)
         {
@@ -564,6 +643,224 @@ public class DungeonNetworkManager : NetworkManager
         }
 
         ServerChangeScene(GameSceneName);
+    }
+
+    [Server]
+    private void ServerSpawnGameCharacters()
+    {
+        ConfigureDefaults();
+
+        if (gameplayPlayerPrefab == null)
+        {
+            Debug.LogError("NetworkPlayerCharacter prefab is missing from Resources.");
+            return;
+        }
+
+        for (int i = 0; i < serverSessionPlayers.Count; i++)
+        {
+            NetworkSessionPlayer sessionPlayer = serverSessionPlayers[i];
+            if (sessionPlayer == null || sessionPlayer.connectionToClient == null)
+            {
+                continue;
+            }
+
+            ServerSpawnGameCharacterForConnection(sessionPlayer.connectionToClient);
+        }
+    }
+
+    [Server]
+    private void ServerSpawnGameCharacterForConnection(NetworkConnectionToClient conn)
+    {
+        if (conn == null)
+        {
+            return;
+        }
+
+        NetworkSessionPlayer sessionPlayer = FindServerSessionPlayer(conn);
+        if (sessionPlayer == null || !sessionPlayer.CharacterCreationReady)
+        {
+            return;
+        }
+
+        if (serverGameplayCharacters.TryGetValue(conn.connectionId, out NetworkPlayerCharacter existingCharacter))
+        {
+            if (existingCharacter != null)
+            {
+                return;
+            }
+
+            serverGameplayCharacters.Remove(conn.connectionId);
+        }
+
+        ConfigureDefaults();
+
+        if (gameplayPlayerPrefab == null)
+        {
+            Debug.LogError("NetworkPlayerCharacter prefab is missing from Resources.");
+            return;
+        }
+
+        Vector3 spawnPosition = GetGameSpawnPosition(sessionPlayer.ColorSlot);
+        GameObject characterObject = Instantiate(gameplayPlayerPrefab, spawnPosition, Quaternion.identity);
+        NetworkPlayerCharacter playerCharacter = characterObject.GetComponent<NetworkPlayerCharacter>();
+
+        if (playerCharacter == null)
+        {
+            Debug.LogError("NetworkPlayerCharacter prefab does not have a NetworkPlayerCharacter component.", characterObject);
+            Destroy(characterObject);
+            return;
+        }
+
+        playerCharacter.ServerInitialize(sessionPlayer, spawnPosition);
+        NetworkServer.Spawn(characterObject, conn);
+        serverGameplayCharacters[conn.connectionId] = playerCharacter;
+    }
+
+    private void RegisterClientGameplayPrefab()
+    {
+        if (gameplayPlayerPrefab == null)
+        {
+            gameplayPlayerPrefab = Resources.Load<GameObject>("NetworkPlayerCharacter");
+        }
+
+        if (gameplayPlayerPrefab == null)
+        {
+            return;
+        }
+
+        if (!gameplayPlayerPrefab.TryGetComponent(out NetworkIdentity identity))
+        {
+            Debug.LogError("NetworkPlayerCharacter prefab is missing a NetworkIdentity.", gameplayPlayerPrefab);
+            return;
+        }
+
+        uint assetId = identity.assetId;
+        if (assetId == 0)
+        {
+            Debug.LogError("NetworkPlayerCharacter prefab has an empty Mirror asset id.", gameplayPlayerPrefab);
+            return;
+        }
+
+        if (NetworkClient.GetPrefab(assetId, out _))
+        {
+            return;
+        }
+
+        NetworkClient.RegisterPrefab(gameplayPlayerPrefab);
+    }
+
+    [Server]
+    private void DestroyServerGameplayCharacter(int connectionId)
+    {
+        if (!serverGameplayCharacters.TryGetValue(connectionId, out NetworkPlayerCharacter playerCharacter))
+        {
+            return;
+        }
+
+        serverGameplayCharacters.Remove(connectionId);
+
+        if (playerCharacter != null)
+        {
+            NetworkServer.Destroy(playerCharacter.gameObject);
+        }
+    }
+
+    private NetworkSessionPlayer FindServerSessionPlayer(NetworkConnectionToClient conn)
+    {
+        if (conn == null)
+        {
+            return null;
+        }
+
+        if (conn.identity != null && conn.identity.TryGetComponent(out NetworkSessionPlayer sessionPlayer))
+        {
+            return sessionPlayer;
+        }
+
+        for (int i = 0; i < serverSessionPlayers.Count; i++)
+        {
+            sessionPlayer = serverSessionPlayers[i];
+            if (sessionPlayer != null && sessionPlayer.connectionToClient == conn)
+            {
+                return sessionPlayer;
+            }
+        }
+
+        return null;
+    }
+
+    private static Vector3 GetGameSpawnPosition(PlayerColor color)
+    {
+        Vector3[] spawnOffsets =
+        {
+            new Vector3(-1.5f, 0.75f, 0f),
+            new Vector3(1.5f, 0.75f, 0f),
+            new Vector3(-1.5f, -0.75f, 0f),
+            new Vector3(1.5f, -0.75f, 0f)
+        };
+
+        int slotIndex = Mathf.Clamp(GetSlotIndex(color), 0, spawnOffsets.Length - 1);
+        return spawnOffsets[slotIndex];
+    }
+
+    private static void PrepareGameSceneClient()
+    {
+        RemoveSceneTemplateControllers();
+        RemoveSceneTemplatePortraits();
+        GameHUDController.EnsureExists();
+    }
+
+    private static void RemoveSceneTemplateControllers()
+    {
+        PlayerController[] controllers = FindObjectsByType<PlayerController>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+
+        for (int i = 0; i < controllers.Length; i++)
+        {
+            PlayerController controller = controllers[i];
+            if (controller == null || controller.GetComponentInParent<NetworkPlayerCharacter>() != null)
+            {
+                continue;
+            }
+
+            Transform targetPlayer = controller.TargetPlayer;
+            if (targetPlayer != null && targetPlayer != controller.transform && targetPlayer.GetComponentInParent<NetworkPlayerCharacter>() == null)
+            {
+                DestroySceneObject(targetPlayer.gameObject);
+            }
+
+            DestroySceneObject(controller.gameObject);
+        }
+    }
+
+    private static void RemoveSceneTemplatePortraits()
+    {
+        PlayerPortrait[] portraits = FindObjectsByType<PlayerPortrait>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+
+        for (int i = 0; i < portraits.Length; i++)
+        {
+            PlayerPortrait portrait = portraits[i];
+            if (portrait != null && portrait.TargetCharacter == null)
+            {
+                DestroySceneObject(portrait.gameObject);
+            }
+        }
+    }
+
+    private static void DestroySceneObject(GameObject sceneObject)
+    {
+        if (sceneObject == null)
+        {
+            return;
+        }
+
+        if (Application.isPlaying)
+        {
+            Destroy(sceneObject);
+        }
+        else
+        {
+            DestroyImmediate(sceneObject);
+        }
     }
 
     private bool ValidateCharacterSubmission(NetworkSessionPlayer player, CharacterSlotData data, out string sanitizedName, out string reason)
@@ -644,6 +941,12 @@ public class DungeonNetworkManager : NetworkManager
             if (parts[i].index < -1 || parts[i].index > 10000)
             {
                 reason = "Character submitted an invalid part index.";
+                return false;
+            }
+
+            if (!string.IsNullOrEmpty(parts[i].spriteName) && parts[i].spriteName.Length > MaxSpriteNameLength)
+            {
+                reason = "Character submitted an invalid sprite name.";
                 return false;
             }
         }

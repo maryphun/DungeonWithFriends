@@ -322,6 +322,85 @@ namespace LayerLab.ArtMakerUnity
         }
 
         /// <summary>
+        /// Returns the active sprite name for the given parts type.
+        /// Used by network character data as a stable fallback when index-only data is ambiguous.
+        /// </summary>
+        public string GetActiveSpriteName(PartsType type)
+        {
+            var cat = GetCategory(type);
+            if (cat == null) return string.Empty;
+
+            int index = GetActiveIndex(type);
+            if (index < 0) return string.Empty;
+
+            if (cat.renderers != null)
+            {
+                foreach (var pr in cat.renderers)
+                {
+                    if (pr.renderer == null || pr.renderer.sprite == null || pr.sprites == null)
+                        continue;
+
+                    if (index < pr.sprites.Length && pr.sprites[index] == pr.renderer.sprite)
+                        return pr.renderer.sprite.name;
+                }
+            }
+
+            Sprite thumbnail = GetThumbnail(type, index);
+            if (thumbnail != null)
+                return thumbnail.name;
+
+            if (cat.renderers != null)
+            {
+                foreach (var pr in cat.renderers)
+                {
+                    if (pr.renderer != null && pr.renderer.sprite != null)
+                        return pr.renderer.sprite.name;
+                }
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// Equips the first sprite in this category whose sprite or thumbnail name matches.
+        /// Returns false when no matching sprite can be found.
+        /// </summary>
+        public bool TryEquipPartBySpriteName(PartsType type, string spriteName)
+        {
+            if (string.IsNullOrWhiteSpace(spriteName)) return false;
+
+            var cat = GetCategory(type);
+            if (cat == null) return false;
+
+            int totalCount = GetPartsCount(type);
+            for (int index = 0; index < totalCount; index++)
+            {
+                Sprite thumbnail = GetThumbnail(type, index);
+                if (thumbnail != null && string.Equals(thumbnail.name, spriteName, StringComparison.Ordinal))
+                {
+                    EquipParts(type, index);
+                    return true;
+                }
+
+                if (cat.renderers == null) continue;
+
+                foreach (var pr in cat.renderers)
+                {
+                    if (pr.sprites == null || index >= pr.sprites.Length || pr.sprites[index] == null)
+                        continue;
+
+                    if (string.Equals(pr.sprites[index].name, spriteName, StringComparison.Ordinal))
+                    {
+                        EquipParts(type, index);
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// Checks whether the given parts type is currently visible.
         /// </summary>
         /// <param name="type">The parts type to check.</param>
