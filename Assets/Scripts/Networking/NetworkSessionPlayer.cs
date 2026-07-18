@@ -28,6 +28,8 @@ public class NetworkSessionPlayer : NetworkBehaviour
     [SyncVar(hook = nameof(OnConnectionIdChanged))]
     private int connectionId = -1;
 
+    private CharacterSlotData characterData;
+
     public static event Action ClientStateChanged;
 
     public static IReadOnlyList<NetworkSessionPlayer> ClientPlayers => ClientPlayersList;
@@ -40,6 +42,7 @@ public class NetworkSessionPlayer : NetworkBehaviour
     public bool IsHost => isHost;
     public string PlayerName => playerName;
     public int ConnectionId => connectionId;
+    public CharacterSlotData CharacterData => characterData;
 
     public string DisplayName
     {
@@ -96,6 +99,7 @@ public class NetworkSessionPlayer : NetworkBehaviour
         isHost = hostSlot;
         lobbyReady = readyByDefault;
         characterCreationReady = false;
+        characterData = default;
         playerName = displayName;
     }
 
@@ -109,6 +113,17 @@ public class NetworkSessionPlayer : NetworkBehaviour
     public void ServerResetCharacterCreationReady()
     {
         characterCreationReady = false;
+        characterData = default;
+    }
+
+    [Server]
+    public void ServerSubmitCharacter(CharacterSlotData acceptedData, string acceptedName)
+    {
+        acceptedData.slot = colorSlot;
+        acceptedData.characterName = acceptedName;
+        characterData = acceptedData;
+        playerName = acceptedName;
+        characterCreationReady = true;
     }
 
     [Command]
@@ -121,6 +136,18 @@ public class NetworkSessionPlayer : NetworkBehaviour
         }
 
         manager.ServerSetLobbyReady(this, ready);
+    }
+
+    [Command]
+    public void CmdSubmitCharacter(CharacterSlotData data)
+    {
+        DungeonNetworkManager manager = DungeonNetworkManager.Active;
+        if (manager == null)
+        {
+            return;
+        }
+
+        manager.ServerSubmitCharacter(this, data);
     }
 
     private void OnHasAssignedColorSlotChanged(bool oldValue, bool newValue)

@@ -1,7 +1,10 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
+using LayerLab.ArtMakerUnity;
 using Mirror;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -22,7 +25,14 @@ public class DungeonNetworkManager : NetworkManager
     public const string MainMenuSceneName = "Main Menu";
     public const string MatchmakingSceneName = "MatchmakingLobby";
     public const string CharacterCreationSceneName = "CharacterCreation";
+    public const string GameSceneName = "Game";
     public const string DefaultAddress = "localhost";
+
+    private const int MaxCharacterNameLength = 16;
+    private const int MaxPartEntries = 32;
+    private const int MaxColorEntries = 8;
+    private const int MaxVisibilityEntries = 32;
+    private const float GameSceneTransitionDelay = 1.5f;
 
     private static readonly PlayerColor[] SlotOrder =
     {
@@ -40,6 +50,7 @@ public class DungeonNetworkManager : NetworkManager
     private readonly List<NetworkSessionPlayer> serverSessionPlayers = new List<NetworkSessionPlayer>();
     private DungeonConnectionState connectionState = DungeonConnectionState.Offline;
     private bool clientJoinInProgress;
+    private Coroutine gameSceneTransitionCoroutine;
 
     public static event Action LobbyChanged;
     public static event Action<DungeonConnectionState, string> ConnectionStateChanged;
@@ -177,6 +188,51 @@ public class DungeonNetworkManager : NetworkManager
         Debug.LogWarning("Host transfer is intentionally disabled for this local lobby phase.");
     }
 
+    public int GetSessionPlayerCount()
+    {
+        if (NetworkServer.active)
+        {
+            return serverSessionPlayers.Count;
+        }
+
+        return NetworkSessionPlayer.ClientPlayers.Count;
+    }
+
+    public int GetCharacterCreationReadyCount()
+    {
+        int readyCount = 0;
+
+        if (NetworkServer.active)
+        {
+            for (int i = 0; i < serverSessionPlayers.Count; i++)
+            {
+                if (serverSessionPlayers[i] != null && serverSessionPlayers[i].CharacterCreationReady)
+                {
+                    readyCount++;
+                }
+            }
+
+            return readyCount;
+        }
+
+        for (int i = 0; i < NetworkSessionPlayer.ClientPlayers.Count; i++)
+        {
+            NetworkSessionPlayer player = NetworkSessionPlayer.ClientPlayers[i];
+            if (player != null && player.CharacterCreationReady)
+            {
+                readyCount++;
+            }
+        }
+
+        return readyCount;
+    }
+
+    public bool IsCharacterCreationComplete()
+    {
+        int playerCount = GetSessionPlayerCount();
+        return playerCount > 0 && GetCharacterCreationReadyCount() >= playerCount;
+    }
+
     public bool CanStartCharacterCreation(out string reason)
     {
         if (!NetworkServer.active)
@@ -223,6 +279,21 @@ public class DungeonNetworkManager : NetworkManager
         RaiseLobbyChanged();
     }
 
+    [Server]
+    public void ServerSubmitCharacter(NetworkSessionPlayer player, CharacterSlotData data)
+    {
+        if (!ValidateCharacterSubmission(player, data, out string sanitizedName, out string reason))
+        {
+            Debug.LogWarning(reason);
+            return;
+        }
+
+        CharacterSlotData acceptedData = NormalizeCharacterSubmission(player, data, sanitizedName);
+        player.ServerSubmitCharacter(acceptedData, sanitizedName);
+        RaiseLobbyChanged();
+        ServerTryStartGameWhenCharactersReady();
+    }
+
     public string GetDisplayAddress()
     {
         if (NetworkServer.active)
@@ -263,6 +334,12 @@ public class DungeonNetworkManager : NetworkManager
 
     public override void OnStopServer()
     {
+        if (gameSceneTransitionCoroutine != null)
+        {
+            StopCoroutine(gameSceneTransitionCoroutine);
+            gameSceneTransitionCoroutine = null;
+        }
+
         serverSessionPlayers.Clear();
         base.OnStopServer();
         RaiseLobbyChanged();
@@ -355,6 +432,11 @@ public class DungeonNetworkManager : NetworkManager
 
         base.OnServerDisconnect(conn);
         RaiseLobbyChanged();
+
+        if (NetworkServer.active && SceneManager.GetActiveScene().name == CharacterCreationSceneName && serverSessionPlayers.Count > 0)
+        {
+            ServerTryStartGameWhenCharactersReady();
+        }
     }
 
     public override void OnServerSceneChanged(string sceneName)
@@ -402,6 +484,12 @@ public class DungeonNetworkManager : NetworkManager
             return false;
         }
 
+        if (gameSceneTransitionCoroutine != null)
+        {
+            StopCoroutine(gameSceneTransitionCoroutine);
+            gameSceneTransitionCoroutine = null;
+        }
+
         for (int i = 0; i < serverSessionPlayers.Count; i++)
         {
             if (serverSessionPlayers[i] != null)
@@ -412,6 +500,248 @@ public class DungeonNetworkManager : NetworkManager
 
         ServerChangeScene(CharacterCreationSceneName);
         return true;
+    }
+
+    private bool CanStartGameAfterCharacterCreation(out string reason)
+    {
+        if (!NetworkServer.active)
+        {
+            reason = "Only the server can start the game scene.";
+            return false;
+        }
+
+        if (serverSessionPlayers.Count < minimumPlayersToStart)
+        {
+            reason = $"Need at least {minimumPlayersToStart} player(s).";
+            return false;
+        }
+
+        for (int i = 0; i < serverSessionPlayers.Count; i++)
+        {
+            NetworkSessionPlayer player = serverSessionPlayers[i];
+            if (player == null || !player.HasAssignedColorSlot)
+            {
+                reason = "Every connected player needs a slot.";
+                return false;
+            }
+
+            if (!player.CharacterCreationReady)
+            {
+                reason = "Every connected player must finish character creation.";
+                return false;
+            }
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private bool ServerTryStartGameWhenCharactersReady()
+    {
+        if (!CanStartGameAfterCharacterCreation(out _))
+        {
+            return false;
+        }
+
+        if (gameSceneTransitionCoroutine == null)
+        {
+            gameSceneTransitionCoroutine = StartCoroutine(ServerStartGameAfterDelay());
+        }
+
+        return true;
+    }
+
+    private IEnumerator ServerStartGameAfterDelay()
+    {
+        yield return new WaitForSeconds(GameSceneTransitionDelay);
+        gameSceneTransitionCoroutine = null;
+
+        if (!CanStartGameAfterCharacterCreation(out string reason))
+        {
+            Debug.LogWarning(reason);
+            RaiseLobbyChanged();
+            yield break;
+        }
+
+        ServerChangeScene(GameSceneName);
+    }
+
+    private bool ValidateCharacterSubmission(NetworkSessionPlayer player, CharacterSlotData data, out string sanitizedName, out string reason)
+    {
+        sanitizedName = SanitizeCharacterName(data.characterName);
+
+        if (player == null || !serverSessionPlayers.Contains(player))
+        {
+            reason = "Unknown player submitted character data.";
+            return false;
+        }
+
+        if (!player.HasAssignedColorSlot)
+        {
+            reason = "Player has no assigned color slot.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(sanitizedName))
+        {
+            reason = "Character name is empty.";
+            return false;
+        }
+
+        if (data.parts != null && data.parts.Length > MaxPartEntries)
+        {
+            reason = "Character submitted too many part entries.";
+            return false;
+        }
+
+        if (data.colors != null && data.colors.Length > MaxColorEntries)
+        {
+            reason = "Character submitted too many color entries.";
+            return false;
+        }
+
+        if (data.visibility != null && data.visibility.Length > MaxVisibilityEntries)
+        {
+            reason = "Character submitted too many visibility entries.";
+            return false;
+        }
+
+        if (!ValidatePartEntries(data.parts, out reason))
+        {
+            return false;
+        }
+
+        if (!ValidateColorEntries(data.colors, out reason))
+        {
+            return false;
+        }
+
+        if (!ValidateVisibilityEntries(data.visibility, out reason))
+        {
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private static bool ValidatePartEntries(CharacterPartSelection[] parts, out string reason)
+    {
+        if (parts == null)
+        {
+            reason = string.Empty;
+            return true;
+        }
+
+        for (int i = 0; i < parts.Length; i++)
+        {
+            if (!Enum.IsDefined(typeof(PartsType), parts[i].type))
+            {
+                reason = "Character submitted an invalid part type.";
+                return false;
+            }
+
+            if (parts[i].index < -1 || parts[i].index > 10000)
+            {
+                reason = "Character submitted an invalid part index.";
+                return false;
+            }
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private static bool ValidateColorEntries(CharacterColorSelection[] colors, out string reason)
+    {
+        if (colors == null)
+        {
+            reason = string.Empty;
+            return true;
+        }
+
+        for (int i = 0; i < colors.Length; i++)
+        {
+            if (!Enum.IsDefined(typeof(ColorTargetType), colors[i].target))
+            {
+                reason = "Character submitted an invalid color target.";
+                return false;
+            }
+
+            if (!IsFiniteColor(colors[i].color))
+            {
+                reason = "Character submitted an invalid color.";
+                return false;
+            }
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private static bool ValidateVisibilityEntries(CharacterVisibilitySelection[] visibility, out string reason)
+    {
+        if (visibility == null)
+        {
+            reason = string.Empty;
+            return true;
+        }
+
+        for (int i = 0; i < visibility.Length; i++)
+        {
+            if (!Enum.IsDefined(typeof(PartsType), visibility[i].type))
+            {
+                reason = "Character submitted an invalid visibility type.";
+                return false;
+            }
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private static CharacterSlotData NormalizeCharacterSubmission(NetworkSessionPlayer player, CharacterSlotData data, string sanitizedName)
+    {
+        data.slot = player.ColorSlot;
+        data.characterName = sanitizedName;
+
+        if (data.parts == null)
+        {
+            data.parts = Array.Empty<CharacterPartSelection>();
+        }
+
+        if (data.colors == null)
+        {
+            data.colors = Array.Empty<CharacterColorSelection>();
+        }
+
+        if (data.visibility == null)
+        {
+            data.visibility = Array.Empty<CharacterVisibilitySelection>();
+        }
+
+        return data;
+    }
+
+    private static string SanitizeCharacterName(string rawName)
+    {
+        string sanitized = Regex.Replace(rawName ?? string.Empty, "[^a-zA-Z]", string.Empty);
+        if (sanitized.Length > MaxCharacterNameLength)
+        {
+            sanitized = sanitized.Substring(0, MaxCharacterNameLength);
+        }
+
+        return sanitized;
+    }
+
+    private static bool IsFiniteColor(Color color)
+    {
+        return IsFinite(color.r) && IsFinite(color.g) && IsFinite(color.b) && IsFinite(color.a);
+    }
+
+    private static bool IsFinite(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
     private PlayerColor? GetFirstAvailableColorSlot()

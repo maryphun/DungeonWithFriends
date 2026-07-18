@@ -3,7 +3,6 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
 using DG.Tweening;
-using System.Linq;
 using LayerLab.ArtMakerUnity;
 using System.Text.RegularExpressions;
 
@@ -30,7 +29,7 @@ public class CharacterCreator : MonoBehaviour
     [SerializeField] private TMP_Text textTitle;
     [SerializeField] private TMP_Text characterName_Text;
     [SerializeField] private TMP_Text waitingforOtherPlayer_Text;
-    [SerializeField] private TMP_Text numberofplayerReady_Text; // this is the actual text where it should show (currently ready player) / max count of player (for example: 2/4) during the wait time.
+    [SerializeField] private TMP_Text numberofplayerReady_Text; // this is the actual text where it should show (currently ready player) / current count of player (for example: 2/4) during the wait time.
     [SerializeField] private CanvasGroup confirmButton;
     [SerializeField] private CanvasGroup inputFieldUI;
     [SerializeField] private TMP_InputField inputField;
@@ -42,11 +41,18 @@ public class CharacterCreator : MonoBehaviour
     [SerializeField] private int startupPresetSlot = 0;
 
     private UIStage currentUIStage;
+    private bool submittedCharacter;
+    private bool sceneTransitionMessageShown;
 
     /// <summary>
     /// The Player instance managed by this demo controller.
     /// </summary>
     public Player Player => player;
+
+    private void OnEnable()
+    {
+        NetworkSessionPlayer.ClientStateChanged += OnNetworkSessionStateChanged;
+    }
 
     private void Start()
     {
@@ -59,12 +65,21 @@ public class CharacterCreator : MonoBehaviour
         if (panelPartsControl != null)
             panelPartsControl.Init(player.PartsManager, panelPartsListControl, equipmentPresetData, startupPresetSlot);
 
-        textTitle.text = "Create your character";
         currentUIStage = UIStage.CharacterCreation;
+        RefreshAssignedColorTitle();
 
         // hide UI for different statge
-        waitingforOtherPlayer_Text.gameObject.SetActive(false);
-        numberofplayerReady_Text.gameObject.SetActive(false);
+        SetWaitingUIVisible(false, false);
+    }
+
+    private void OnDisable()
+    {
+        NetworkSessionPlayer.ClientStateChanged -= OnNetworkSessionStateChanged;
+
+        if (inputField != null)
+        {
+            inputField.onValueChanged.RemoveListener(OnChangeValueInputFieldName);
+        }
     }
 
     /// <summary>
@@ -85,6 +100,7 @@ public class CharacterCreator : MonoBehaviour
 
     private void Update()
     {
+        if (currentUIStage != UIStage.CharacterCreation) return;
         if (IsTextInputFocused()) return;
         if (Input.GetKeyDown(KeyCode.R))
             OnClickResetAll();
@@ -109,21 +125,22 @@ public class CharacterCreator : MonoBehaviour
     {
         if (currentUIStage != UIStage.WaitForOtherPlayers) return;
 
-        // insert mirror code here and display the number of player that are ready
-        numberofplayerReady_Text.text = "/";
-
-        // check if every player are ready.
-        if (false) // insert mirror code here to check
+        if (AreAllKnownPlayersCharacterReady())
         {
-            currentUIStage = UIStage.SceneTransition;
+            EnterSceneTransitionStage();
         }
     }
 
     private void SceneTransitionUpdate()
     {
-        if (currentUIStage != UIStage.SceneTransition) return;
+        if (currentUIStage != UIStage.SceneTransition || sceneTransitionMessageShown) return;
 
-        // everyone wait 1.5 seconds here then transit to the next scene, "Game".
+        sceneTransitionMessageShown = true;
+
+        if (waitingforOtherPlayer_Text != null)
+        {
+            waitingforOtherPlayer_Text.text = "Starting game...";
+        }
     }
 
     /// <summary>
@@ -176,6 +193,7 @@ public class CharacterCreator : MonoBehaviour
                     inputField.interactable = true;
                     inputField.Select();
                     inputField.ActivateInputField();
+                    inputField.onValueChanged.RemoveListener(OnChangeValueInputFieldName);
                     inputField.onValueChanged.AddListener(OnChangeValueInputFieldName);
                 }
             );
@@ -183,33 +201,19 @@ public class CharacterCreator : MonoBehaviour
             characterName_Text.text = string.Empty;
             currentUIStage = UIStage.Name;
         }
-        else if ( currentUIStage == UIStage.Name )
+        else if (currentUIStage == UIStage.Name)
         {
-            currentUIStage = UIStage.WaitForOtherPlayers;
-            player.PartsManager.GetComponent<Animator>().Play("Jump");
-
-            confirmButton.gameObject.SetActive(false);
-            inputField.onValueChanged.RemoveAllListeners();
-            inputFieldUI.interactable = false;
-            inputFieldUI.DOFade(0.0f, 1.0f);
-            textTitle.DOFade(0.0f, 1.0f);
-            characterName_Text.text = inputField.text;
-            characterName_Text.fontMaterial.SetColor(ShaderUtilities.ID_OutlineColor, Color.white);
-            characterName_Text.fontMaterial.SetFloat(ShaderUtilities.ID_OutlineWidth, 0.5f);
-
-            // player stuck here until all other player are ready. Show a UI that update instantly about the number of player that are ready
-            waitingforOtherPlayer_Text.gameObject.SetActive(true);
-            waitingforOtherPlayer_Text.alpha = 0.0f;
-            waitingforOtherPlayer_Text.DOFade(1.0f, 1.0f);
-            numberofplayerReady_Text.gameObject.SetActive(true);
-            numberofplayerReady_Text.alpha = 0.0f;
-            numberofplayerReady_Text.DOFade(1.0f, 1.0f);
-            numberofplayerReady_Text.text = "0/4"; // update this UI on FixedUpdate()
+            EnterWaitForOtherPlayersStage();
         }
     }
 
     public void OnChangeValueInputFieldName(string input)
     {
+        if (inputField == null || confirmButton == null)
+        {
+            return;
+        }
+
         string filtered = Regex.Replace(input, "[^a-zA-Z]", "");
 
         if (filtered != input)
@@ -228,4 +232,219 @@ public class CharacterCreator : MonoBehaviour
             confirmButton.DOFade(0.0f, 0.5f);
         }
     }
+
+    private void EnterWaitForOtherPlayersStage()
+    {
+        currentUIStage = UIStage.WaitForOtherPlayers;
+
+        if (player != null && player.PartsManager != null)
+        {
+            Animator animator = player.PartsManager.GetComponent<Animator>();
+            if (animator != null)
+            {
+                animator.Play("Jump");
+            }
+        }
+
+        if (confirmButton != null)
+        {
+            confirmButton.gameObject.SetActive(false);
+        }
+
+        if (inputField != null)
+        {
+            inputField.onValueChanged.RemoveListener(OnChangeValueInputFieldName);
+        }
+
+        if (inputFieldUI != null)
+        {
+            inputFieldUI.interactable = false;
+            inputFieldUI.DOFade(0.0f, 1.0f);
+        }
+
+        if (textTitle != null)
+        {
+            textTitle.DOFade(0.0f, 1.0f);
+        }
+
+        if (characterName_Text != null)
+        {
+            characterName_Text.text = inputField != null ? inputField.text : string.Empty;
+            characterName_Text.fontMaterial.SetColor(ShaderUtilities.ID_OutlineColor, Color.white);
+            characterName_Text.fontMaterial.SetFloat(ShaderUtilities.ID_OutlineWidth, 0.5f);
+        }
+
+        // player stuck here until all other player are ready. Show a UI that update instantly about the number of player that are ready
+        SetWaitingUIVisible(true, true);
+        SubmitCharacterSelection();
+        RefreshCharacterCreationWaitingUI();
+    }
+
+    private void SubmitCharacterSelection()
+    {
+        if (submittedCharacter)
+        {
+            return;
+        }
+
+        NetworkSessionPlayer localPlayer = NetworkSessionPlayer.LocalPlayer;
+        if (localPlayer == null || !localPlayer.HasAssignedColorSlot)
+        {
+            Debug.LogWarning("Cannot submit character because no local network session player is assigned.");
+            return;
+        }
+
+        if (player == null || player.PartsManager == null)
+        {
+            Debug.LogWarning("Cannot submit character because the character PartsManager is missing.");
+            return;
+        }
+
+        string characterName = inputField != null ? inputField.text : string.Empty;
+        CharacterSlotData data = CharacterSlotDataUtility.FromPreset(localPlayer.ColorSlot, characterName, player.PartsManager.ToPresetItem());
+        localPlayer.CmdSubmitCharacter(data);
+        submittedCharacter = true;
+    }
+
+    private void SetWaitingUIVisible(bool visible, bool fade)
+    {
+        SetTextVisible(waitingforOtherPlayer_Text, visible, fade);
+        SetTextVisible(numberofplayerReady_Text, visible, fade);
+
+        if (visible && numberofplayerReady_Text != null)
+        {
+            numberofplayerReady_Text.text = "0/0";
+        }
+    }
+
+    private static void SetTextVisible(TMP_Text text, bool visible, bool fade)
+    {
+        if (text == null)
+        {
+            return;
+        }
+
+        text.gameObject.SetActive(visible);
+
+        if (!visible)
+        {
+            text.alpha = 0.0f;
+            return;
+        }
+
+        if (fade)
+        {
+            text.alpha = 0.0f;
+            text.DOFade(1.0f, 1.0f);
+        }
+        else
+        {
+            text.alpha = 1.0f;
+        }
+    }
+
+
+    private void OnNetworkSessionStateChanged()
+    {
+        if (currentUIStage == UIStage.CharacterCreation)
+        {
+            RefreshAssignedColorTitle();
+            return;
+        }
+
+        if (currentUIStage == UIStage.WaitForOtherPlayers || currentUIStage == UIStage.SceneTransition)
+        {
+            RefreshCharacterCreationWaitingUI();
+        }
+    }
+
+    private void RefreshAssignedColorTitle()
+    {
+        if (textTitle == null || currentUIStage != UIStage.CharacterCreation)
+        {
+            return;
+        }
+
+        NetworkSessionPlayer localPlayer = NetworkSessionPlayer.LocalPlayer;
+        textTitle.text = localPlayer != null && localPlayer.HasAssignedColorSlot
+            ? $"Create your {localPlayer.ColorSlot} character"
+            : "Create your character";
+    }
+
+    private void RefreshCharacterCreationWaitingUI()
+    {
+        int playerCount = GetKnownPlayerCount();
+        int readyCount = GetKnownReadyCount();
+
+        if (numberofplayerReady_Text != null)
+        {
+            numberofplayerReady_Text.text = $"{readyCount}/{playerCount}";
+        }
+
+        if (currentUIStage == UIStage.WaitForOtherPlayers && playerCount > 0 && readyCount >= playerCount)
+        {
+            EnterSceneTransitionStage();
+        }
+    }
+
+    private int GetKnownPlayerCount()
+    {
+        DungeonNetworkManager manager = DungeonNetworkManager.Active;
+        if (manager != null)
+        {
+            int sessionCount = manager.GetSessionPlayerCount();
+            if (sessionCount > 0)
+            {
+                return sessionCount;
+            }
+        }
+
+        return NetworkSessionPlayer.ClientPlayers.Count;
+    }
+
+    private int GetKnownReadyCount()
+    {
+        DungeonNetworkManager manager = DungeonNetworkManager.Active;
+        if (manager != null)
+        {
+            return manager.GetCharacterCreationReadyCount();
+        }
+
+        int readyCount = 0;
+        for (int i = 0; i < NetworkSessionPlayer.ClientPlayers.Count; i++)
+        {
+            NetworkSessionPlayer sessionPlayer = NetworkSessionPlayer.ClientPlayers[i];
+            if (sessionPlayer != null && sessionPlayer.CharacterCreationReady)
+            {
+                readyCount++;
+            }
+        }
+
+        return readyCount;
+    }
+
+    private bool AreAllKnownPlayersCharacterReady()
+    {
+        DungeonNetworkManager manager = DungeonNetworkManager.Active;
+        if (manager != null)
+        {
+            return manager.IsCharacterCreationComplete();
+        }
+
+        int playerCount = NetworkSessionPlayer.ClientPlayers.Count;
+        return playerCount > 0 && GetKnownReadyCount() >= playerCount;
+    }
+
+    private void EnterSceneTransitionStage()
+    {
+        if (currentUIStage == UIStage.SceneTransition)
+        {
+            return;
+        }
+
+        currentUIStage = UIStage.SceneTransition;
+        sceneTransitionMessageShown = false;
+        SceneTransitionUpdate();
+    }
+
 }
