@@ -1,5 +1,6 @@
 using Mirror.BouncyCastle.Asn1.BC;
 using UnityEngine;
+using TMPro;
 
 struct MatchmakingLobbyPlayerSlotData
 {
@@ -22,6 +23,9 @@ public class MatchmakingLobbyController : MonoBehaviour
     [Header("Ready Checks")]
     [SerializeField] private GameObject[] readyChecks = new GameObject[3];
 
+    [Header("IP")]
+    [SerializeField] private TMP_Text IPAddress; // display the ip address of this matchmakinglobby
+
     MatchmakingLobbyPlayerSlotData[] slotData = new MatchmakingLobbyPlayerSlotData[4]; // index 0 is always the host.
     public bool isHost; // determine locally if this player is host
     public int mySlotIndex; // determine locally the slot index of this user
@@ -32,6 +36,8 @@ public class MatchmakingLobbyController : MonoBehaviour
 
         foreach (GameObject readyCheck_Fill in readyChecks) { readyCheck_Fill.SetActive(false); } // set everything to false first.
         foreach (TMPro.TMP_Text playerName in playerNameDisplay) { playerName.text = "Empty"; }
+
+        IPAddress.text = string.Empty; // assume this would be remvoed after steam matchmaking replace this.
     }
 
     public void SetupScene()
@@ -87,5 +93,10 @@ public class MatchmakingLobbyController : MonoBehaviour
     {
         // executable by host only
 
+    }
+
+    public void OnClickCopyIPAddressToClippBoard()
+    {
+        GUIUtility.systemCopyBuffer = IPAddress.text;
     }
 }
